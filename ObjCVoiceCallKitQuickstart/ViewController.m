@@ -15,12 +15,12 @@
 static NSString *const kYourServerBaseURLString = <#URL TO YOUR ACCESS TOKEN SERVER#>;
 static NSString *const kAccessTokenEndpoint = @"/accessToken";
 
-@interface ViewController () <PKPushRegistryDelegate, TVONotificationDelegate, TVOIncomingCallDelegate, TVOOutgoingCallDelegate, CXProviderDelegate>
+@interface ViewController () <PKPushRegistryDelegate, TVONotificationDelegate, TVOCallDelegate, CXProviderDelegate>
 @property (nonatomic, strong) NSString *deviceTokenString;
 
 @property (nonatomic, strong) PKPushRegistry *voipRegistry;
-@property (nonatomic, strong) TVOIncomingCall *incomingCall;
-@property (nonatomic, strong) TVOOutgoingCall *outgoingCall;
+@property (nonatomic, strong) TVOCallInvite *callInvite;
+@property (nonatomic, strong) TVOCall *call;
 
 @property (nonatomic, strong) CXProvider *callKitProvider;
 @property (nonatomic, strong) CXCallController *callKitCallController;
@@ -35,6 +35,8 @@ static NSString *const kAccessTokenEndpoint = @"/accessToken";
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    
+    [[VoiceClient sharedInstance] setLogLevel:TVOLogLevelVerbose];
 
     self.voipRegistry = [[PKPushRegistry alloc] initWithQueue:dispatch_get_main_queue()];
     self.voipRegistry.delegate = self;
@@ -72,10 +74,15 @@ static NSString *const kAccessTokenEndpoint = @"/accessToken";
 }
 
 - (IBAction)placeCall:(id)sender {
-    NSUUID *uuid = [NSUUID UUID];
-    NSString *handle = @"Voice Bot";
-
-    [self performStartCallActionWithUUID:uuid handle:handle];
+    if (self.call && self.call.state == TVOCallStateConnected) {
+        [self.call disconnect];
+        [self toggleUIState:NO];
+    } else {
+        NSUUID *uuid = [NSUUID UUID];
+        NSString *handle = @"Voice Bot";
+        
+        [self performStartCallActionWithUUID:uuid handle:handle];
+    }
 }
 
 - (void)toggleUIState:(BOOL)isEnabled {
@@ -133,80 +140,67 @@ static NSString *const kAccessTokenEndpoint = @"/accessToken";
 }
 
 #pragma mark - TVONotificationDelegate
-- (void)incomingCallReceived:(TVOIncomingCall *)incomingCall {
-    NSLog(@"incomingCallReceived:");
+- (void)callInviteReceived:(TVOCallInvite *)callInvite {
+    NSLog(@"callInviteReceived:");
+    
+    if (self.callInvite && self.callInvite == TVOCallInviteStatePending) {
+        NSLog(@"Already a pending incoming call invite.");
+        NSLog(@"  >> Ignoring call from %@", callInvite.from);
+        return;
+    } else if (self.call) {
+        NSLog(@"Already an active call.");
+        NSLog(@"  >> Ignoring call from %@", callInvite.from);
+        return;
+    }
 
-    self.incomingCall = incomingCall;
-    self.incomingCall.delegate = self;
+    self.callInvite = callInvite;
 
-    [self reportIncomingCallFrom:@"Voice Bot" withUUID:incomingCall.uuid];
+    [self reportIncomingCallFrom:@"Voice Bot" withUUID:callInvite.uuid];
 }
 
-- (void)incomingCallCancelled:(TVOIncomingCall *)incomingCall {
-    NSLog(@"incomingCallCancelled:");
+- (void)callInviteCancelled:(TVOCallInvite *)callInvite {
+    NSLog(@"callInviteCancelled:");
 
-    [self performEndCallActionWithUUID:incomingCall.uuid];
+    [self performEndCallActionWithUUID:callInvite.uuid];
 
-    self.incomingCall = nil;
+    self.callInvite = nil;
 }
 
 - (void)notificationError:(NSError *)error {
     NSLog(@"notificationError: %@", [error localizedDescription]);
 }
 
-#pragma mark - TVOIncomingCallDelegate
-- (void)incomingCallDidConnect:(TVOIncomingCall *)incomingCall {
-    NSLog(@"incomingCallDidConnect:");
+#pragma mark - TVOCallDelegate
+- (void)callDidConnect:(TVOCall *)call {
+    NSLog(@"callDidConnect:");
 
-    self.incomingCall = incomingCall;
-    [self toggleUIState:NO];
+    self.call = call;
+    
+    [self.placeCallButton setTitle:@"Hang Up" forState:UIControlStateNormal];
+    
+    [self toggleUIState:YES];
     [self stopSpin];
     [self routeAudioToSpeaker];
 }
 
-- (void)incomingCallDidDisconnect:(TVOIncomingCall *)incomingCall {
-    NSLog(@"incomingCallDidDisconnect:");
+- (void)callDidDisconnect:(TVOCall *)call {
+    NSLog(@"callDidDisconnect:");
 
-    [self performEndCallActionWithUUID:incomingCall.uuid];
+    [self performEndCallActionWithUUID:call.uuid];
 
-    self.incomingCall = nil;
+    self.call = nil;
+    
+    [self.placeCallButton setTitle:@"Place Outgoing Call" forState:UIControlStateNormal];
+    
     [self toggleUIState:YES];
 }
 
-- (void)incomingCall:(TVOIncomingCall *)incomingCall didFailWithError:(NSError *)error {
-    NSLog(@"incomingCall:didFailWithError: %@", [error localizedDescription]);
+- (void)call:(TVOCall *)call didFailWithError:(NSError *)error {
+    NSLog(@"call:didFailWithError: %@", [error localizedDescription]);
 
-    [self performEndCallActionWithUUID:incomingCall.uuid];
+    [self performEndCallActionWithUUID:call.uuid];
 
-    self.incomingCall = nil;
-    [self toggleUIState:YES];
-    [self stopSpin];
-}
-
-#pragma mark - TVOOutgoingCallDelegate
-- (void)outgoingCallDidConnect:(TVOOutgoingCall *)outgoingCall {
-    NSLog(@"outgoingCallDidConnect:");
-
-    [self toggleUIState:NO];
-    [self stopSpin];
-    [self routeAudioToSpeaker];
-}
-
-- (void)outgoingCallDidDisconnect:(TVOOutgoingCall *)outgoingCall {
-    NSLog(@"outgoingCallDidDisconnect:");
-
-    [self performEndCallActionWithUUID:outgoingCall.uuid];
-
-    self.outgoingCall = nil;
-    [self toggleUIState:YES];
-}
-
-- (void)outgoingCall:(TVOOutgoingCall *)outgoingCall didFailWithError:(NSError *)error {
-    NSLog(@"outgoingCall:didFailWithError: %@", [error localizedDescription]);
-
-    [self performEndCallActionWithUUID:outgoingCall.uuid];
-
-    self.outgoingCall = nil;
+    self.call = nil;
     [self toggleUIState:YES];
     [self stopSpin];
 }
@@ -283,14 +277,14 @@ static NSString *const kAccessTokenEndpoint = @"/accessToken";
 
     [[VoiceClient sharedInstance] configureAudioSession];
 
-    self.outgoingCall = [[VoiceClient sharedInstance] call:[self fetchAccessToken]
-                                                    params:@{}
-                                                  delegate:self];
+    self.call = [[VoiceClient sharedInstance] call:[self fetchAccessToken]
+                                            params:@{}
+                                          delegate:self];
 
-    if (!self.outgoingCall) {
+    if (!self.call) {
         [action fail];
     } else {
-        self.outgoingCall.uuid = action.callUUID;
+        self.call.uuid = action.callUUID;
         [self toggleUIState:NO];
         [self startSpin];
 
@@ -306,7 +300,10 @@ static NSString *const kAccessTokenEndpoint = @"/accessToken";
     //      `provider:performAnswerCallAction:` per the WWDC examples.
     // [[VoiceClient sharedInstance] configureAudioSession];
 
-    [self.incomingCall acceptWithDelegate:self];
+    self.call = [self.callInvite acceptWithDelegate:self];
+    if (self.call) {
+        self.call.uuid = [action callUUID];
+    }
 
     [action fulfill];
 }
@@ -316,14 +313,10 @@ static NSString *const kAccessTokenEndpoint = @"/accessToken";
 
     [[VoiceClient sharedInstance] stopAudioDevice];
 
-    if (self.incomingCall) {
-        if (self.incomingCall.state == TVOIncomingCallStatePending) {
-            [self.incomingCall reject];
-        } else {
-            [self.incomingCall disconnect];
-        }
-    } else if (self.outgoingCall) {
-        [self.outgoingCall disconnect];
+    if (self.callInvite && self.callInvite.state == TVOCallInviteStatePending) {
+        [self.callInvite reject];
+    } else if (self.call) {
+        [self.call disconnect];
     }
 
     [action fulfill];
