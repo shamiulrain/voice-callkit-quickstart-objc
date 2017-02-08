@@ -304,6 +304,8 @@ static NSString *const kAccessTokenEndpoint = @"/accessToken";
     if (self.call) {
         self.call.uuid = [action callUUID];
     }
+    
+    self.callInvite = nil;
 
     [action fulfill];
 }
@@ -315,6 +317,7 @@ static NSString *const kAccessTokenEndpoint = @"/accessToken";
 
     if (self.callInvite && self.callInvite.state == TVOCallInviteStatePending) {
         [self.callInvite reject];
+        self.callInvite = nil;
     } else if (self.call) {
         [self.call disconnect];
     }
